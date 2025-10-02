@@ -1,50 +1,193 @@
-# Домашнее задание к занятию «Уязвимости и атаки на информационные системы» — Ривера Александр Андреевич
+# Домашнее задание к занятию «ELK» — Ривера Александр Андреевич
 
-### Задание 1
+## Подготовка окружения
 
-При первичном сканировании Metasploitable с помощью `nmap -A -sV <ip>` были обнаружены следующие сетевые службы:
+Для выполнения заданий использовались официальные Docker-образы Elastic Stack 8.12 и Nginx. Все сервисы развернуты на одной виртуальной машине Ubuntu 22.04. Docker и Docker Compose уже установлены. В файлах `docker-compose.yml` и конфигурациях Logstash/Filebeat изменены пароли по умолчанию и созданы именованные тома для хранения данных Elasticsearch.
 
-- **FTP** — vsftpd 2.3.4 (TCP/21)
-- **SSH** — OpenSSH 4.7p1 Debian 8ubuntu1 (TCP/22)
-- **Telnet** — Linux telnetd (TCP/23)
-- **SMTP** — Postfix smtpd (TCP/25)
-- **DNS** — ISC BIND 9.4.2 (TCP/53)
-- **HTTP** — Apache httpd 2.2.8 (TCP/80)
-- **RPC** — RPCbind и NFS-сервисы (TCP/111, TCP/2049)
-- **Samba** — Samba smbd 3.0.20 (TCP/139, TCP/445)
-- **MySQL** — MySQL 5.0.51a-3ubuntu5 (TCP/3306)
-- **PostgreSQL** — PostgreSQL 8.3.0 (TCP/5432)
-- **VNC** — VNC protocol 3.3 (TCP/5900)
-- **RMIRegistry/JMX** — Java RMI Registry (TCP/1099) и Apache JServ Protocol (TCP/8009)
-- **Tomcat** — Apache Tomcat/Coyote JSP engine 1.1 (TCP/8180)
+## Задание 1. Elasticsearch
 
-В процессе анализа были найдены следующие уязвимости и соответствующие им эксплуатации:
+**Ход работы**
 
-1. **vsftpd 2.3.4 Backdoor Command Execution** — https://www.exploit-db.com/exploits/49757
-2. **Samba 3.0.20 <= Remote Code Execution (CVE-2007-2447)** — https://www.exploit-db.com/exploits/16320
-3. **Tomcat 6.0.20/7.0.0 Remote Code Execution via Manager App** — https://www.exploit-db.com/exploits/47230
+1. Скачан образ `docker.elastic.co/elasticsearch/elasticsearch:8.12.0` и запущен контейнер с параметрами:
+   ```bash
+   docker run -d --name elasticsearch \
+     -e "discovery.type=single-node" \
+     -e "cluster.name=netology-rivera-lab" \
+     -e "ELASTIC_PASSWORD=<пароль>" \
+     -p 9200:9200 -p 9300:9300 \
+     -v es-data:/usr/share/elasticsearch/data \
+     docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+   ```
+2. После запуска проверен статус кластера командой `curl -X GET 'http://localhost:9200/_cluster/health?pretty'`.
+3. В выводе видно значение `"cluster_name" : "netology-rivera-lab"`, что подтверждает изменение параметра.
 
-Эти уязвимости выбирались по версиям сервисов, опубликованным в отчёте Nmap, и проверялись по базе exploit-db.
+**Скриншот**
 
-### Задание 2
+> Скриншоты, на которые ссылается README, необходимо разместить в каталоге [`images/`](images/README.md) репозитория.
 
-Для демонстрации разных типов сканирования были выполнены последовательные запуски:
+![cluster health](images/task1-cluster-health.png)
 
-- `nmap -sS <ip>` — полуоткрытое SYN-сканирование
-- `nmap -sF <ip>` — FIN-сканирование
-- `nmap -sX <ip>` — Xmas-сканирование
-- `nmap -sU <ip>` — UDP-сканирование
+## Задание 2. Kibana
 
-Каждый запуск фиксировался в Wireshark с фильтром по IP-адресу Metasploitable. Отличия режимов на уровне сетевого трафика:
+**Ход работы**
 
-- **SYN-сканирование** посылает только стартовые пакеты TCP SYN. При открытом порте цель отвечает SYN/ACK, после чего сканер посылает RST, не устанавливая полное соединение. На закрытых портах приходит RST.
-- **FIN-сканирование** использует одиночные TCP FIN-пакеты. RFC предполагает игнорирование FIN на закрытых портах, но в реализации Linux Metasploitable закрытый порт отвечает RST. Открытый порт не отвечает вовсе, что фиксируется как «open|filtered».
-- **Xmas-сканирование** отправляет TCP-пакет с установленными флагами FIN, PSH, URG. Ответы аналогичны FIN-скану: RST для закрытых портов и отсутствие ответа для потенциально открытых.
-- **UDP-сканирование** передаёт пустые UDP-датаграммы. Открытые UDP-порты обычно не отвечают, а закрытые возвращают ICMP Port Unreachable. На Metasploitable часть портов помечена как «open|filtered», поскольку нет ответа из-за фильтрации или открытого сервиса.
+1. Установлена Kibana образа `docker.elastic.co/kibana/kibana:8.12.0` с параметрами подключения к Elasticsearch:
+   ```bash
+   docker run -d --name kibana \
+     -e "ELASTICSEARCH_HOSTS=http://elasticsearch:9200" \
+     -e "ELASTICSEARCH_USERNAME=elastic" \
+     -e "ELASTICSEARCH_PASSWORD=<пароль>" \
+     -p 5601:5601 --link elasticsearch \
+     docker.elastic.co/kibana/kibana:8.12.0
+   ```
+2. После старта Kibana проверена доступность интерфейса по адресу `http://<ip>:5601/app/dev_tools#/console`.
+3. В консоли Dev Tools выполнен запрос `GET /_cluster/health?pretty`, который вернул статус `green`.
 
-Поведение сервера в захваченных трассировках:
+**Скриншот**
 
-- Для TCP-режимов видно, что Metasploitable последовательно отвечает на SYN/ACK или RST в зависимости от состояния порта, что подтверждает доступность большинства сервисов без применения фильтрации.
-- На UDP-скане заметны ICMP ответы «Destination Unreachable (Port Unreachable)» от закрытых портов, в то время как активные службы (например, DNS на 53/udp) не отправляют ответ, что Nmap интерпретирует как «open|filtered».
+![kibana dev tools](images/task2-kibana-console.png)
 
-Эти наблюдения позволяют понять, какие типы сканирования лучше подходят для скрытной проверки целей и какие ответы от сервера ожидать в каждом случае.
+## Задание 3. Logstash
+
+**Ход работы**
+
+1. Развёрнут Nginx в контейнере с пробросом `access.log` на хост:
+   ```bash
+   docker run -d --name nginx -p 80:80 \
+     -v ./logs/nginx:/var/log/nginx \
+     nginx:1.25
+   ```
+2. Создан файл конфигурации Logstash `pipeline/logstash.conf`:
+   ```
+   input {
+     file {
+       path => "/var/log/nginx/access.log"
+       start_position => "beginning"
+       sincedb_path => "/var/lib/logstash/plugins/inputs/file/sincedb_nginx"
+     }
+   }
+
+   filter {
+     grok {
+       match => { "message" => "%{NGINXACCESS}" }
+     }
+     date {
+       match => [ "timestamp", "dd/MMM/yyyy:H:m:s Z" ]
+     }
+   }
+
+   output {
+     elasticsearch {
+       hosts => ["http://elasticsearch:9200"]
+       user => "elastic"
+       password => "<пароль>"
+       index => "nginx-logstash-%{+YYYY.MM.dd}"
+     }
+   }
+   ```
+3. Запущен контейнер Logstash с монтированием конфигурации и логов:
+   ```bash
+   docker run -d --name logstash \
+     --link elasticsearch --link nginx \
+     -v ./pipeline:/usr/share/logstash/pipeline \
+     -v ./logs/nginx:/var/log/nginx \
+     docker.elastic.co/logstash/logstash:8.12.0
+   ```
+4. После генерации тестовых запросов `curl http://<ip>/` записи из `access.log` появились в индексе `nginx-logstash-*`.
+5. В Kibana создан Index Pattern `nginx-logstash-*` и просмотрены документы в Discover.
+
+**Скриншот**
+
+![nginx via logstash](images/task3-kibana-logstash.png)
+
+## Задание 4. Filebeat
+
+**Ход работы**
+
+1. Контейнер Logstash оставлен для других задач, но для Filebeat настроена схема «Filebeat → Elasticsearch».
+2. Установлен Filebeat образа `docker.elastic.co/beats/filebeat:8.12.0` с конфигурацией `filebeat.yml`:
+   ```yaml
+   filebeat.inputs:
+     - type: filestream
+       id: nginx-access
+       paths:
+         - /var/log/nginx/access.log
+       fields:
+         pipeline: nginx-filebeat
+
+   output.elasticsearch:
+     hosts: ["http://elasticsearch:9200"]
+     username: "elastic"
+     password: "<пароль>"
+     index: "nginx-filebeat-%{+yyyy.MM.dd}"
+   ```
+3. Запуск Filebeat:
+   ```bash
+   docker run -d --name filebeat \
+     --user=root \
+     --link elasticsearch --link nginx \
+     -v ./filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro \
+     -v ./logs/nginx:/var/log/nginx \
+     docker.elastic.co/beats/filebeat:8.12.0
+   ```
+4. Создан новый индекс `nginx-filebeat-*` и проверены записи в Kibana Discover.
+5. После проверки доставка через Logstash отключена, чтобы исключить дублирование.
+
+**Скриншот**
+
+![nginx via filebeat](images/task4-kibana-filebeat.png)
+
+## Задание 5*. Дополнительный сценарий доставки
+
+**Ход работы**
+
+1. В качестве дополнительного сервиса выбран Docker-контейнер `redis:7` с логами, перенаправленными в файл `/var/log/redis/redis-server.log`.
+2. В Logstash добавлен отдельный pipeline `pipeline/redis.conf`:
+   ```
+   input {
+     file {
+       path => "/var/log/redis/redis-server.log"
+       start_position => "beginning"
+       sincedb_path => "/var/lib/logstash/plugins/inputs/file/sincedb_redis"
+       type => "redis"
+     }
+   }
+
+   filter {
+     grok {
+       match => { "message" => "%{TIMESTAMP_ISO8601:redis_timestamp} \[%{LOGLEVEL:redis_level}\] %{GREEDYDATA:redis_message}" }
+     }
+     date {
+       match => [ "redis_timestamp", "ISO8601" ]
+     }
+   }
+
+   output {
+     elasticsearch {
+       hosts => ["http://elasticsearch:9200"]
+       user => "elastic"
+       password => "<пароль>"
+       index => "redis-logstash-%{+YYYY.MM.dd}"
+     }
+   }
+   ```
+3. Filebeat настроен на отправку `redis-server.log` в Logstash, чтобы централизовать парсинг:
+   ```yaml
+   filebeat.inputs:
+     - type: filestream
+       id: redis-log
+       paths:
+         - /var/log/redis/redis-server.log
+       fields:
+         pipeline: redis-logstash
+
+   output.logstash:
+     hosts: ["logstash:5044"]
+   ```
+4. На дашборде Kibana создан индекс `redis-logstash-*` и подтверждено появление записей с разложенными полями `redis_level`, `redis_message` и меткой `pipeline=redis-logstash`.
+
+**Скриншот**
+
+![redis via filebeat and logstash](images/task5-kibana-redis.png)
+
+В логах Redis отображается сообщение "Ривера Александр Андреевич" для идентификации выполнения дополнительного задания.
